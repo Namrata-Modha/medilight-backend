@@ -1,0 +1,19 @@
+{
+  "name": "medilight-backend",
+  "version": "2.0.0",
+  "description": "MediLight Dispensing System — Backend API + WebSocket Server",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "mongoose": "^8.0.0",
+    "socket.io": "^4.7.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
