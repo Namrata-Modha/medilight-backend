@@ -16,6 +16,7 @@ const verificationRoutes = require("./routes/verification");
 const ledRoutes = require("./routes/led");
 const auditRoutes = require("./routes/audit");
 const testRoutes = require("./routes/tests");
+const aiRoutes = require("./routes/ai");
 
 // ─── Express App ──────────────────────────────────────────────
 const app = express();
@@ -50,6 +51,7 @@ app.use("/api/verify-id", verificationRoutes);
 app.use("/api/led", ledRoutes);
 app.use("/api/audit", auditRoutes);
 app.use("/api/test", testRoutes);
+app.use("/api/ai", aiRoutes);                     
 
 // ─── Start ────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
