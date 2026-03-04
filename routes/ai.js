@@ -13,6 +13,48 @@ function getApiKey() {
   return process.env.GEMINI_API_KEY;
 }
 
+/**
+ * Robustly clean and parse JSON from Gemini output.
+ * Handles: markdown fences, trailing commas, single quotes,
+ * unquoted keys, control characters, and partial responses.
+ */
+function cleanAndParseJSON(raw) {
+  let text = raw || "";
+
+  // Strip markdown code fences
+  text = text.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+
+  // Remove any leading text before the first { or [
+  const firstBrace = text.indexOf("{");
+  if (firstBrace > 0) text = text.slice(firstBrace);
+
+  // Remove any trailing text after the last } or ]
+  const lastBrace = text.lastIndexOf("}");
+  if (lastBrace >= 0) text = text.slice(0, lastBrace + 1);
+
+  // Fix trailing commas before } or ] (most common Gemini issue)
+  text = text.replace(/,\s*([\]}])/g, "$1");
+
+  // Replace single quotes with double quotes (but not inside words like "don't")
+  text = text.replace(/(?<=[{,[\s:])'/g, '"').replace(/'(?=[},\]:\s])/g, '"');
+
+  // Remove control characters
+  text = text.replace(/[\x00-\x1F\x7F]/g, (ch) => ch === "\n" || ch === "\t" ? ch : "");
+
+  // Try standard parse first
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    // Fallback: try to fix unquoted property names
+    const fixed = text.replace(/(\{|,)\s*([a-zA-Z_]\w*)\s*:/g, '$1"$2":');
+    try {
+      return JSON.parse(fixed);
+    } catch (e2) {
+      throw new Error(`JSON parse failed after cleanup: ${e.message}`);
+    }
+  }
+}
+
 // POST /api/ai/parse-text — Parse prescription text (PHI already redacted by frontend)
 router.post("/parse-text", async (req, res) => {
   const apiKey = getApiKey();
@@ -84,8 +126,7 @@ CRITICAL MATCHING RULES:
     const data = await response.json();
     const textContent =
       data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    const cleaned = textContent.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(cleaned);
+    const parsed = cleanAndParseJSON(textContent);
 
     await auditLog("AI_PARSE_TEXT", { items_found: parsed.items?.length || 0 });
     res.json(parsed);
@@ -171,8 +212,7 @@ CRITICAL MATCHING RULES:
     const data = await response.json();
     const textContent =
       data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    const cleaned = textContent.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(cleaned);
+    const parsed = cleanAndParseJSON(textContent);
 
     await auditLog("AI_PARSE_IMAGE", { items_found: parsed.items?.length || 0 });
     res.json(parsed);

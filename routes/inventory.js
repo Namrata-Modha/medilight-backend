@@ -1,4 +1,4 @@
-// routes/inventory.js — Product CRUD (list, get, create, update, reset)
+// routes/inventory.js — Product CRUD (list, get, create, update, delete, reset)
 
 const { Router } = require("express");
 const { readFileSync } = require("fs");
@@ -78,8 +78,36 @@ router.post("/", async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
       [product_id, name, price, age_restricted || false, stock_count || 0, led_address, category, reorder_threshold || 20]
     );
-    await auditLog("PRODUCT_ADDED", { product_id });
+    await auditLog("PRODUCT_ADDED", { product_id, name });
     res.status(201).json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/inventory/:productId — Remove a product
+router.delete("/:productId", async (req, res) => {
+  const { productId } = req.params;
+  try {
+    // Check for existing order references
+    const { rows: refs } = await pool.query(
+      "SELECT COUNT(*) as count FROM order_items WHERE product_id = $1",
+      [productId]
+    );
+    if (parseInt(refs[0].count) > 0) {
+      return res.status(409).json({
+        error: `Cannot delete — ${refs[0].count} order(s) reference this product. Remove order history first or use Reset All Data.`,
+      });
+    }
+
+    const { rows } = await pool.query(
+      "DELETE FROM products WHERE product_id = $1 RETURNING *",
+      [productId]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Product not found" });
+
+    await auditLog("PRODUCT_DELETED", { product_id: productId, name: rows[0].name });
+    res.json({ status: "deleted", product: rows[0] });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
