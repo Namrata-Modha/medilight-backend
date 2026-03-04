@@ -28,7 +28,7 @@ router.post("/parse-text", async (req, res) => {
   }
 
   try {
-    const prompt = `You are a pharmacy prescription parser. Extract medications from this prescription text (which may be messy OCR output). Match medications to our inventory. Patient details have been redacted for privacy — focus only on medications.
+    const prompt = `You are a pharmacy prescription parser. Extract medications from this prescription text (which may be messy OCR output with typos and misspellings). Match medications to our inventory even if names are misspelled.
 
 OUR INVENTORY:
 ${inventory || "No inventory provided"}
@@ -51,11 +51,14 @@ Respond ONLY with a JSON object (no markdown, no backticks, no extra text):
   "notes": "any warnings about the prescription"
 }
 
-Rules:
-- Match medications by active ingredient name
+CRITICAL MATCHING RULES:
+- Match medications by active ingredient even with OCR typos (e.g. "Codiene"→Codeine, "Omprazole"→Omeprazole, "Cetrizine"→Cetirizine, "Asprin"→Aspirin)
+- Use fuzzy matching: if a medication name is 1-2 characters off from an inventory item, MATCH IT and set confidence to "medium"
+- Quantity formats: "Qty: 30", "#30", "qty 30", "(thirty)" all mean quantity 30
+- Shorthand: "#" means quantity, "mg" may be omitted
 - If quantity unclear, default to 30
 - Include ALL medications found, even if not in inventory
-- confidence: "high" if clear match, "medium" if partially garbled, "low" if unsure`;
+- ALWAYS try to match to inventory — only return null for matched_product_id if truly no match exists`;
 
     const response = await fetch(
       `${GEMINI_API}/${MODEL}:generateContent?key=${apiKey}`,
@@ -114,7 +117,7 @@ Respond ONLY with a JSON object (no markdown, no backticks, no extra text):
 {
   "items": [
     {
-      "medication_name": "medication name",
+      "medication_name": "medication name as written",
       "quantity_requested": number,
       "matched_product_id": "product_id from inventory or null",
       "confidence": "high" or "medium" or "low"
@@ -123,11 +126,14 @@ Respond ONLY with a JSON object (no markdown, no backticks, no extra text):
   "notes": "any warnings (do NOT include patient or doctor names here)"
 }
 
-Rules:
+CRITICAL MATCHING RULES:
 - ONLY extract medications — NO personal/health information
-- Match by active ingredient
+- Match by active ingredient even with handwriting variations or misspellings (e.g. "Codiene"→Codeine med_091, "Omprazole"→Omeprazole med_056, "Cetrizine"→Cetirizine med_067)
+- Quantity formats: "Qty: 30", "#30", "qty 30", "(thirty)" all mean quantity 30
+- Shorthand: "#" means quantity, "mg" may be omitted
 - If quantity unclear, default to 30
-- Include ALL medications, even if not in inventory`;
+- Include ALL medications found, even if not in inventory
+- ALWAYS try to match to inventory — only return null for matched_product_id if truly no match exists`;
 
     const response = await fetch(
       `${GEMINI_API}/${MODEL}:generateContent?key=${apiKey}`,
