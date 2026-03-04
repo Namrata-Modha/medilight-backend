@@ -7,7 +7,7 @@ const { auditLog } = require("../db");
 const router = Router();
 
 const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models";
-const MODEL = "gemini-2.5-flash-preview-05-20";
+const MODEL = "gemini-2.5-flash";
 
 function getApiKey() {
   return process.env.GEMINI_API_KEY;
@@ -20,7 +20,9 @@ router.post("/parse-text", async (req, res) => {
     return res.status(500).json({ error: "GEMINI_API_KEY not configured on server" });
   }
 
-  const { redacted_text, inventory } = req.body;
+  // Accept both "text" (from frontend ai.js) and "redacted_text" (legacy)
+  const redacted_text = req.body.text || req.body.redacted_text;
+  const inventory = req.body.inventory;
   if (!redacted_text) {
     return res.status(400).json({ error: "Missing redacted_text" });
   }
