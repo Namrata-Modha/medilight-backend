@@ -14,6 +14,31 @@ function getApiKey() {
 }
 
 /**
+ * Extract the actual response text from Gemini output.
+ * Gemini 2.5 Flash is a thinking model — it may return multiple parts:
+ *   parts[0] = { thought: true, text: "thinking..." }
+ *   parts[1] = { text: '{"items": [...]}' }
+ * We need the non-thought part that contains JSON.
+ */
+function extractGeminiText(data) {
+  const parts = data.candidates?.[0]?.content?.parts || [];
+
+  // First: try to find a non-thought part containing JSON
+  for (const part of parts) {
+    if (!part.thought && part.text && part.text.includes("{")) {
+      return part.text;
+    }
+  }
+
+  // Fallback: last part's text (original behavior)
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i].text) return parts[i].text;
+  }
+
+  return "";
+}
+
+/**
  * Robustly clean and parse JSON from Gemini output.
  * Handles: markdown fences, trailing commas, single quotes,
  * unquoted keys, control characters, and partial responses.
@@ -124,8 +149,7 @@ CRITICAL MATCHING RULES:
     }
 
     const data = await response.json();
-    const textContent =
-      data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    const textContent = extractGeminiText(data);
     const parsed = cleanAndParseJSON(textContent);
 
     await auditLog("AI_PARSE_TEXT", { items_found: parsed.items?.length || 0 });
@@ -210,8 +234,7 @@ CRITICAL MATCHING RULES:
     }
 
     const data = await response.json();
-    const textContent =
-      data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    const textContent = extractGeminiText(data);
     const parsed = cleanAndParseJSON(textContent);
 
     await auditLog("AI_PARSE_IMAGE", { items_found: parsed.items?.length || 0 });
