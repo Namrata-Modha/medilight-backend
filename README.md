@@ -100,9 +100,9 @@ npm run dev
 
 ### Verify Deployment
 
-- **Swagger UI**: `https://your-backend.onrender.com/api/docs`
-- **Test Suite**: `https://your-backend.onrender.com/api/test/run-all` (should show 10/10 PASS)
-- **Health Check**: `https://your-backend.onrender.com/api/health`
+- **Swagger UI**: `https://medilight-backend.onrender.com/api/docs`
+- **Test Suite**: `https://medilight-backend.onrender.com/api/test/run-all` (should show 10/10 PASS)
+- **Health Check**: `https://medilight-backend.onrender.com/api/health`
 
 ## Key Design Decisions
 
@@ -113,6 +113,6 @@ npm run dev
 
 ## Related Repos
 
-- **Dashboard** → [medilight-dashboard](https://github.com/YOUR_USERNAME/medilight-dashboard)
-- **Shelf Device** → [medilight-shelf](https://github.com/YOUR_USERNAME/medilight-shelf)
-- **Project Guide + Test Images** → [medilight-guide](https://github.com/YOUR_USERNAME/medilight-guide)
+- **Dashboard** → [medilight-dashboard](https://github.com/Namrata-Modha/medilight-dashboard)
+- **Shelf Device** → [medilight-shelf](https://github.com/Namrata-Modha/medilight-shelf)
+- **Project Guide + Test Images** → [medilight-guide](https://github.com/Namrata-Modha/medilight-guide)
