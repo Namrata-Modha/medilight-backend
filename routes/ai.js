@@ -1,29 +1,51 @@
-// routes/ai.js — Free AI prescription parsing via Google Gemini
-// No cost — uses Gemini 2.5 Flash free tier (250 req/day, no credit card)
+// routes/ai.js — AI prescription parsing via Google Gemini (security-hardened)
+//
+// Security changes vs original:
+//   • aiLimiter (20 req / 15 min) — protects the 250 req/day free quota
+//   • Schema validation: text ≤ 8000 chars, inventory ≤ 4000 chars,
+//     image_base64 ≤ 5 MB, media_type restricted to known MIME types
+//   • GEMINI_API_KEY checked at request time — returns 503 if missing (fail-safe)
+//   • Gemini upstream errors sanitized — raw API bodies never forwarded to client
+//   • Raw err.message never sent to client on catch
+//
+// Functionality preserved vs original:
+//   • Full fuzzy-matching prompt text (Codiene→Codeine, Omprazole→Omeprazole, etc.)
+//   • generationConfig (temperature: 0.1, maxOutputTokens: 1000)
+//   • inlineData / mimeType (correct camelCase for Gemini REST API)
+//   • extractGeminiText() — handles Gemini 2.5 Flash thinking model multi-part response
+//   • cleanAndParseJSON() — all original cleanup logic preserved
 
-const { Router } = require("express");
+const { Router }   = require("express");
 const { auditLog } = require("../db");
+const { aiLimiter } = require("../middleware/rateLimiter");
+const {
+  validate,
+  aiParseTextSchema,
+  aiParseImageSchema,
+} = require("../middleware/validate");
 
 const router = Router();
 
 const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models";
-const MODEL = "gemini-2.5-flash";
+const MODEL      = "gemini-2.5-flash";
 
+// ─── API key access (OWASP A02) ───────────────────────────────────────────────
+// Key is ONLY read from environment — never hard-coded.
 function getApiKey() {
-  return process.env.GEMINI_API_KEY;
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) {
+    console.error("[security] GEMINI_API_KEY is not set in environment variables");
+  }
+  return key;
 }
 
-/**
- * Extract the actual response text from Gemini output.
- * Gemini 2.5 Flash is a thinking model — it may return multiple parts:
- *   parts[0] = { thought: true, text: "thinking..." }
- *   parts[1] = { text: '{"items": [...]}' }
- * We need the non-thought part that contains JSON.
- */
+// ─── Gemini 2.5 Flash thinking-model response extractor ──────────────────────
+// parts[0] may be { thought: true, text: "reasoning..." }
+// parts[1] is the actual JSON response we want
 function extractGeminiText(data) {
   const parts = data.candidates?.[0]?.content?.parts || [];
 
-  // First: try to find a non-thought part containing JSON
+  // First: find a non-thought part containing JSON
   for (const part of parts) {
     if (!part.thought && part.text && part.text.includes("{")) {
       return part.text;
@@ -38,63 +60,55 @@ function extractGeminiText(data) {
   return "";
 }
 
-/**
- * Robustly clean and parse JSON from Gemini output.
- * Handles: markdown fences, trailing commas, single quotes,
- * unquoted keys, control characters, and partial responses.
- */
+// ─── Robust JSON cleanup (handles common Gemini output quirks) ────────────────
 function cleanAndParseJSON(raw) {
   let text = raw || "";
 
   // Strip markdown code fences
   text = text.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
 
-  // Remove any leading text before the first { or [
+  // Remove any leading text before the first {
   const firstBrace = text.indexOf("{");
   if (firstBrace > 0) text = text.slice(firstBrace);
 
-  // Remove any trailing text after the last } or ]
+  // Remove any trailing text after the last }
   const lastBrace = text.lastIndexOf("}");
   if (lastBrace >= 0) text = text.slice(0, lastBrace + 1);
 
-  // Fix trailing commas before } or ] (most common Gemini issue)
+  // Fix trailing commas before } or ]
   text = text.replace(/,\s*([\]}])/g, "$1");
 
-  // Replace single quotes with double quotes (but not inside words like "don't")
+  // Replace single quotes with double quotes
   text = text.replace(/(?<=[{,[\s:])'/g, '"').replace(/'(?=[},\]:\s])/g, '"');
 
-  // Remove control characters
+  // Remove control characters (preserve newlines and tabs)
   text = text.replace(/[\x00-\x1F\x7F]/g, (ch) => ch === "\n" || ch === "\t" ? ch : "");
 
-  // Try standard parse first
+  // Standard parse
   try {
     return JSON.parse(text);
-  } catch (e) {
-    // Fallback: try to fix unquoted property names
+  } catch {
+    // Fallback: fix unquoted property names
     const fixed = text.replace(/(\{|,)\s*([a-zA-Z_]\w*)\s*:/g, '$1"$2":');
-    try {
-      return JSON.parse(fixed);
-    } catch (e2) {
-      throw new Error(`JSON parse failed after cleanup: ${e.message}`);
-    }
+    return JSON.parse(fixed);
   }
 }
 
-// POST /api/ai/parse-text — Parse prescription text (PHI already redacted by frontend)
-router.post("/parse-text", async (req, res) => {
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    return res.status(500).json({ error: "GEMINI_API_KEY not configured on server" });
-  }
+// ─── POST /api/ai/parse-text ──────────────────────────────────────────────────
+router.post(
+  "/parse-text",
+  aiLimiter,
+  validate(aiParseTextSchema),
+  async (req, res) => {
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      return res.status(503).json({ error: "AI service is not configured on this server" });
+    }
 
-  // Accept both "text" (from frontend ai.js) and "redacted_text" (legacy)
-  const redacted_text = req.body.text || req.body.redacted_text;
-  const inventory = req.body.inventory;
-  if (!redacted_text) {
-    return res.status(400).json({ error: "Missing redacted_text" });
-  }
+    // Accept both "text" (frontend ai.js) and "redacted_text" (legacy)
+    const redacted_text = req.body.text || req.body.redacted_text;
+    const { inventory } = req.body;
 
-  try {
     const prompt = `You are a pharmacy prescription parser. Extract medications from this prescription text (which may be messy OCR output with typos and misspellings). Match medications to our inventory even if names are misspelled.
 
 OUR INVENTORY:
@@ -127,52 +141,54 @@ CRITICAL MATCHING RULES:
 - Include ALL medications found, even if not in inventory
 - ALWAYS try to match to inventory — only return null for matched_product_id if truly no match exists`;
 
-    const response = await fetch(
-      `${GEMINI_API}/${MODEL}:generateContent?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 1000,
-          },
-        }),
-      }
-    );
+    try {
+      const response = await fetch(
+        `${GEMINI_API}/${MODEL}:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0.1,
+              maxOutputTokens: 1000,
+            },
+          }),
+        }
+      );
 
-    if (!response.ok) {
-      const errBody = await response.text();
-      console.error("[AI] Gemini API error:", response.status, errBody);
-      return res.status(502).json({ error: `Gemini API returned ${response.status}` });
+      if (!response.ok) {
+        // Do NOT forward Gemini's raw error body — may contain quota/key info
+        console.error("[ai/parse-text] Gemini API error:", response.status);
+        return res.status(502).json({ error: "AI service returned an error. Please try again." });
+      }
+
+      const data        = await response.json();
+      const textContent = extractGeminiText(data);
+      const parsed      = cleanAndParseJSON(textContent);
+
+      await auditLog("AI_PARSE_TEXT", { items_found: parsed.items?.length || 0 });
+      res.json(parsed);
+    } catch (err) {
+      console.error("[ai/parse-text] Error:", err.message);
+      res.status(500).json({ error: "AI parsing failed. Please try again or use manual entry." });
+    }
+  }
+);
+
+// ─── POST /api/ai/parse-image ─────────────────────────────────────────────────
+router.post(
+  "/parse-image",
+  aiLimiter,
+  validate(aiParseImageSchema),
+  async (req, res) => {
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      return res.status(503).json({ error: "AI service is not configured on this server" });
     }
 
-    const data = await response.json();
-    const textContent = extractGeminiText(data);
-    const parsed = cleanAndParseJSON(textContent);
+    const { image_base64, media_type, inventory } = req.body;
 
-    await auditLog("AI_PARSE_TEXT", { items_found: parsed.items?.length || 0 });
-    res.json(parsed);
-  } catch (err) {
-    console.error("[AI] Parse text error:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST /api/ai/parse-image — Analyze prescription image (only extracts meds, no PHI)
-router.post("/parse-image", async (req, res) => {
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    return res.status(500).json({ error: "GEMINI_API_KEY not configured on server" });
-  }
-
-  const { image_base64, media_type, inventory } = req.body;
-  if (!image_base64) {
-    return res.status(400).json({ error: "Missing image_base64" });
-  }
-
-  try {
     const prompt = `You are a pharmacy prescription parser. Read this prescription image and extract ONLY medication data. DO NOT extract or return any patient names, doctor names, clinic names, addresses, dates of birth, or phone numbers — these are protected health information.
 
 OUR INVENTORY:
@@ -200,49 +216,51 @@ CRITICAL MATCHING RULES:
 - Include ALL medications found, even if not in inventory
 - ALWAYS try to match to inventory — only return null for matched_product_id if truly no match exists`;
 
-    const response = await fetch(
-      `${GEMINI_API}/${MODEL}:generateContent?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  inlineData: {
-                    mimeType: media_type || "image/jpeg",
-                    data: image_base64,
+    try {
+      const response = await fetch(
+        `${GEMINI_API}/${MODEL}:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    // NOTE: camelCase is required by the Gemini REST API
+                    inlineData: {
+                      mimeType: media_type || "image/jpeg",
+                      data: image_base64,
+                    },
                   },
-                },
-                { text: prompt },
-              ],
+                  { text: prompt },
+                ],
+              },
+            ],
+            generationConfig: {
+              temperature: 0.1,
+              maxOutputTokens: 1000,
             },
-          ],
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 1000,
-          },
-        }),
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        console.error("[ai/parse-image] Gemini API error:", response.status);
+        return res.status(502).json({ error: "AI Vision service returned an error. Please try again." });
       }
-    );
 
-    if (!response.ok) {
-      const errBody = await response.text();
-      console.error("[AI] Gemini Vision error:", response.status, errBody);
-      return res.status(502).json({ error: `Gemini API returned ${response.status}` });
+      const data        = await response.json();
+      const textContent = extractGeminiText(data);
+      const parsed      = cleanAndParseJSON(textContent);
+
+      await auditLog("AI_PARSE_IMAGE", { items_found: parsed.items?.length || 0, media_type });
+      res.json(parsed);
+    } catch (err) {
+      console.error("[ai/parse-image] Error:", err.message);
+      res.status(500).json({ error: "AI image parsing failed. Please try again." });
     }
-
-    const data = await response.json();
-    const textContent = extractGeminiText(data);
-    const parsed = cleanAndParseJSON(textContent);
-
-    await auditLog("AI_PARSE_IMAGE", { items_found: parsed.items?.length || 0 });
-    res.json(parsed);
-  } catch (err) {
-    console.error("[AI] Parse image error:", err.message);
-    res.status(500).json({ error: err.message });
   }
-});
+);
 
 module.exports = router;

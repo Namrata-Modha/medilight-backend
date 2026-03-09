@@ -1,118 +1,124 @@
 # MediLight Backend
 
-**Express.js API server for the MediLight Smart Dispensing System.**
+Express API server for the MediLight Dispensing System.  
+PostgreSQL via Neon · WebSocket · Swagger UI · Security-hardened (v3.1)
 
-> REST API + WebSocket + Gemini AI proxy + PostgreSQL inventory + Swagger docs
+## Features
 
-![Node](https://img.shields.io/badge/Node.js-Express-339933?logo=node.js) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Neon-4169E1?logo=postgresql) ![Gemini](https://img.shields.io/badge/Gemini_AI-Proxy-4285F4?logo=google) ![Render](https://img.shields.io/badge/Deployed-Render-46E3B7?logo=render)
-
-## What This Does
-
-This is the brain of MediLight. It sits between the pharmacist dashboard, the AI engine, the database, and the shelf hardware:
-
-- **Proxies Gemini AI** calls (keeps API key server-side, never exposed to browser)
-- **Manages inventory** in PostgreSQL with full CRUD + stock tracking
-- **Processes orders** with atomic transactions (deduct stock → save order → trigger LEDs)
-- **Broadcasts LED commands** to shelf devices via WebSocket
-- **Verifies patient identity** for controlled substance compliance (age 18+, ID format)
-- **Logs everything** to an audit trail for compliance
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/health` | Server + database health check |
-| GET | `/api/inventory` | List all products |
-| POST | `/api/inventory` | Add new product |
-| PUT | `/api/inventory/:id` | Update product fields |
-| DELETE | `/api/inventory/:id` | Delete product (checks order refs) |
-| POST | `/api/inventory/reset` | Reset to 12 seed products |
-| POST | `/api/ai/parse-text` | Gemini AI text analysis (PHI redacted) |
-| POST | `/api/ai/parse-image` | Gemini AI Vision analysis |
-| POST | `/api/ocr/extract` | Server-side regex prescription parser |
-| POST | `/api/orders/confirm` | Confirm order + deduct stock + trigger LEDs |
-| GET | `/api/orders` | Order history with line items |
-| POST | `/api/verify-id` | Patient ID verification (age 18+) |
-| POST | `/api/led/trigger` | Manual LED broadcast to devices |
-| GET | `/api/audit` | Compliance audit log |
-| GET | `/api/test/run-all` | Run 10 automated tests |
-| GET | `/api/docs` | Swagger UI (interactive API explorer) |
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Runtime | Node.js + Express.js |
-| Database | PostgreSQL on Neon (free forever) |
-| AI Proxy | Google Gemini 2.5 Flash (250 req/day free) |
-| WebSocket | ws library for ESP32 shelf devices |
-| API Docs | Swagger UI (auto-generated) |
-| Hosting | Render (free tier) |
+- **Inventory CRUD** — Products with stock tracking and LED addresses
+- **Order Processing** — Atomic stock deduction + LED activation in one transaction
+- **OCR Parsing** — Server-side regex prescription fallback
+- **AI Parsing** — Google Gemini 2.5 Flash (text + vision) via secure proxy
+- **ID Verification** — Controlled substance compliance gate
+- **Audit Trail** — Every action logged with timestamps
+- **WebSocket** — Real-time LED commands to ESP32 shelf devices
+- **Rate Limiting** — IP-based, tiered per endpoint (express-rate-limit)
+- **Input Validation** — Schema-based allowlist on all user inputs
+- **Security Headers** — helmet() with CSP, HSTS, X-Frame-Options, and more
 
 ## Project Structure
 
 ```
-├── server.js              ← Express app + middleware + route wiring
-├── db.js                  ← PostgreSQL connection pool + schema init + audit logging
-├── websocket.js           ← WebSocket server for shelf LED devices
-├── schema.sql             ← Database tables + 12 seed medications
-├── swagger.js             ← OpenAPI 3.0 specification
-├── routes/
-│   ├── ai.js              ← Gemini AI proxy (text + vision + thinking model handler)
-│   ├── inventory.js       ← Product CRUD + stock management + delete
-│   ├── orders.js          ← Atomic order processing + LED broadcast
-│   ├── ocr.js             ← Server-side regex prescription parser
-│   ├── verification.js    ← Patient ID verification (age + format)
-│   ├── health.js          ← Health check endpoint
-│   ├── led.js             ← Manual LED trigger
-│   ├── audit.js           ← Audit trail retrieval
-│   └── tests.js           ← 10 automated API tests
+medilight-backend/
+├── server.js                 ← Entry point — helmet, CORS, global rate limiter
+├── db.js                     ← Neon PostgreSQL pool + auditLog helper
+├── websocket.js              ← WebSocket server + broadcast
+├── swagger.js                ← OpenAPI 3.0 spec
+├── schema.sql                ← DB schema + seed data
+├── middleware/
+│   ├── rateLimiter.js        ← 4-tier rate limiting (global/write/ai/nuke)
+│   └── validate.js           ← Schema-based input validation + field stripping
+└── routes/
+    ├── health.js             ← GET /api/health
+    ├── inventory.js          ← CRUD /api/inventory — reset/delete need X-Admin-Secret
+    ├── orders.js             ← POST /api/orders/confirm, GET /api/orders
+    ├── ocr.js                ← POST /api/ocr/extract
+    ├── ai.js                 ← POST /api/ai/parse-text, /api/ai/parse-image
+    ├── verification.js       ← POST /api/verify-id
+    ├── led.js                ← POST /api/led/trigger
+    ├── audit.js              ← GET /api/audit
+    └── tests.js              ← GET /api/test/run-all (dev only)
 ```
 
-## Setup
-
-### Environment Variables
-
-Set these in Render's Environment tab:
-
-| Variable | Value |
-|----------|-------|
-| `DATABASE_URL` | `postgresql://user:pass@host/db?sslmode=require` (from Neon) |
-| `GEMINI_API_KEY` | `AIza...` (from [Google AI Studio](https://aistudio.google.com)) |
-| `NODE_ENV` | `production` |
-
-### Run Locally
+## Setup (Local)
 
 ```bash
 npm install
-cp .env.example .env  # fill in DATABASE_URL and GEMINI_API_KEY
+cp .env.example .env
+# Fill in DATABASE_URL, GEMINI_API_KEY, ADMIN_SECRET in .env
 npm run dev
 ```
 
-### Deploy to Render
+Swagger UI → http://localhost:3001/api/docs
 
-1. Push this repo to GitHub
-2. Go to [render.com](https://render.com) → New Web Service → Connect repo
-3. Build Command: `npm install`
-4. Start Command: `node server.js`
-5. Add environment variables (see above)
-6. Deploy — note your URL for the dashboard config
+## Environment Variables
 
-### Verify Deployment
+All secrets live in environment variables — never in source code.
 
-- **Swagger UI**: `https://medilight-backend.onrender.com/api/docs`
-- **Test Suite**: `https://medilight-backend.onrender.com/api/test/run-all` (should show 10/10 PASS)
-- **Health Check**: `https://medilight-backend.onrender.com/api/health`
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | ✅ | Neon PostgreSQL connection string |
+| `GEMINI_API_KEY` | ✅ | Google Gemini API key (free tier: 250 req/day) |
+| `ADMIN_SECRET` | ✅ | Guards `/reset` and `DELETE` endpoints — generate with `openssl rand -hex 32` |
+| `ALLOWED_ORIGINS` | ✅ | Comma-separated list of allowed frontend origins (e.g. your Render dashboard URL) |
+| `NODE_ENV` | ✅ | Set to `production` on Render |
+| `DOCS_ENABLED` | optional | Set `true` to expose Swagger UI in production (default: hidden) |
+| `TEST_ROUTES_ENABLED` | optional | Set `true` to expose `/api/test/run-all` in production (default: hidden) |
+| `PORT` | auto | Set automatically by Render |
 
-## Key Design Decisions
+## Deploy to Render
 
-- **Gemini thinking model handling**: `extractGeminiText()` skips `thought: true` parts and finds the actual JSON response — Gemini 2.5 Flash returns multi-part responses where `parts[0]` is reasoning
-- **Robust JSON parsing**: `cleanAndParseJSON()` handles trailing commas, single quotes, markdown fences, and unquoted keys that Gemini sometimes produces
-- **Atomic orders**: Stock deduction + order creation wrapped in a PostgreSQL transaction with ROLLBACK on failure
-- **Delete protection**: Cannot delete products referenced by existing orders
+1. Connect the `medilight-backend` GitHub repo to Render
+2. **Build command:** `npm install`
+3. **Start command:** `node server.js`
+4. Add all environment variables above in the Render dashboard (Environment tab)
+5. Trigger a manual deploy
 
-## Related Repos
+> The old `MONGO_URI` variable is no longer used — remove it from Render if it still exists.
 
-- **Dashboard** → [medilight-dashboard](https://github.com/Namrata-Modha/medilight-dashboard)
-- **Shelf Device** → [medilight-shelf](https://github.com/Namrata-Modha/medilight-shelf)
-- **Project Guide + Test Images** → [medilight-guide](https://github.com/Namrata-Modha/medilight-guide)
+## Rate Limits
+
+| Tier | Endpoints | Limit |
+|---|---|---|
+| Global | All routes | 500 req / 15 min / IP |
+| Write | Orders confirm, inventory mutations, OCR, verify-id | 50 req / 15 min / IP |
+| AI | `/api/ai/*` | 20 req / 15 min / IP |
+| Nuke | Inventory reset, product delete | 5 req / 15 min / IP |
+
+All 429 responses include `Retry-After` headers.
+
+## Using Admin-Protected Endpoints
+
+The `/api/inventory/reset` and `DELETE /api/inventory/:id` endpoints require:
+
+```bash
+curl -X POST https://your-backend.onrender.com/api/inventory/reset \
+  -H "X-Admin-Secret: your-admin-secret-here"
+```
+
+## API Reference
+
+Full interactive docs at `/api/docs` (enabled in dev, opt-in in production via `DOCS_ENABLED=true`).
+
+### Key Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/health` | Server + DB status |
+| GET | `/api/inventory` | List all products |
+| POST | `/api/inventory` | Add product |
+| PUT | `/api/inventory/:id` | Update product |
+| DELETE | `/api/inventory/:id` | Delete product (admin) |
+| POST | `/api/inventory/reset` | Wipe + re-seed DB (admin) |
+| POST | `/api/orders/confirm` | Confirm order, deduct stock, trigger LEDs |
+| GET | `/api/orders` | Order history |
+| POST | `/api/ocr/extract` | Parse prescription text |
+| POST | `/api/ai/parse-text` | AI prescription text analysis |
+| POST | `/api/ai/parse-image` | AI prescription image analysis |
+| POST | `/api/verify-id` | Patient ID verification |
+| POST | `/api/led/trigger` | Manual LED broadcast |
+| GET | `/api/audit` | Audit log |
+
+## Security
+
+See [SECURITY.md](./SECURITY.md) for a full breakdown of all hardening measures, the OWASP controls applied, and the key rotation procedure.
