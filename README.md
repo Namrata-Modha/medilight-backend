@@ -74,7 +74,6 @@ All secrets live in environment variables — never in source code.
 4. Add all environment variables above in the Render dashboard (Environment tab)
 5. Trigger a manual deploy
 
-> The old `MONGO_URI` variable is no longer used — remove it from Render if it still exists.
 
 ## Rate Limits
 
