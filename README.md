@@ -6,14 +6,14 @@ PostgreSQL via Neon · WebSocket · Swagger UI · Security-hardened (v3.1)
 ## Features
 
 - **Inventory CRUD** — Products with stock tracking and LED addresses
-- **Order Processing** — Atomic stock deduction + LED activation in one transaction
+- **Order Processing** — Stock deduction and LED activation on order confirmation
 - **OCR Parsing** — Server-side regex prescription fallback
 - **AI Parsing** — Google Gemini 2.5 Flash (text + vision) via secure proxy
-- **ID Verification** — Controlled substance compliance gate
-- **Audit Trail** — Every action logged with timestamps
+- **ID Verification** — Patient ID check for controlled substances
+- **Audit Trail** — Timestamped audit log of key events
 - **WebSocket** — Real-time LED commands to ESP32 shelf devices
 - **Rate Limiting** — IP-based, tiered per endpoint (express-rate-limit)
-- **Input Validation** — Schema-based allowlist on all user inputs
+- **Input Validation** — Schema-based allowlist for request inputs
 - **Security Headers** — helmet() with CSP, HSTS, X-Frame-Options, and more
 
 ## Project Structure
